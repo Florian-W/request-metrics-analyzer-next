@@ -6,3 +6,17 @@ branches:
     - master
 before_install: 'mvn -version'
 install: 'mvn clean install -Pfull -DskipTests'
+
+after_success: |
+  if [ -n "$GITHUB_API_KEY" ]; then
+    cd "$TRAVIS_BUILD_DIR"
+  	cd target/
+  	mkdir git
+    cd git
+  	git init
+    git checkout -b builds
+    mv ../analyzer-next-*-with-dependencies.jar .
+    git add .
+    git -c user.name='travis' -c user.email='travis' commit -m bulild
+    git push -f -q https://skliche:$GITHUB_API_KEY@github.com/skliche/request-metrics-analyzer-next.git builds
+  fi

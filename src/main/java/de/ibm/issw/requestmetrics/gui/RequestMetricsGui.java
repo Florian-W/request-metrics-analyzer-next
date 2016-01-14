@@ -3,7 +3,6 @@ package de.ibm.issw.requestmetrics.gui;
 import java.awt.BorderLayout;
 import java.awt.Component;
 import java.awt.Dimension;
-import java.awt.FileDialog;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
 import java.io.File;
@@ -14,56 +13,62 @@ import java.util.Date;
 import java.util.List;
 import java.util.Observable;
 import java.util.Observer;
-import java.util.logging.Logger;
 
-import javax.swing.JDialog;
+import javax.swing.BorderFactory;
+import javax.swing.JFileChooser;
 import javax.swing.JFrame;
-import javax.swing.JInternalFrame;
 import javax.swing.JMenu;
 import javax.swing.JMenuBar;
 import javax.swing.JMenuItem;
 import javax.swing.JOptionPane;
+import javax.swing.JPanel;
 import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTable;
 import javax.swing.ListSelectionModel;
+import javax.swing.border.TitledBorder;
 import javax.swing.event.ListSelectionEvent;
 import javax.swing.event.ListSelectionListener;
+import javax.swing.filechooser.FileFilter;
 import javax.swing.table.DefaultTableCellRenderer;
 import javax.swing.table.TableCellRenderer;
+
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import de.ibm.issw.requestmetrics.engine.RmProcessor;
 import de.ibm.issw.requestmetrics.engine.events.LogParsingTypeEvent;
 import de.ibm.issw.requestmetrics.engine.events.NonUniqueRequestIdEvent;
 import de.ibm.issw.requestmetrics.engine.events.ParsingAllFilesHasFinishedEvent;
-import de.ibm.issw.requestmetrics.engine.events.ParsingFileHasFinishedEvent;
 import de.ibm.issw.requestmetrics.engine.events.PercentageIncreasedEvent;
 import de.ibm.issw.requestmetrics.engine.events.UnsupportedFileEvent;
 import de.ibm.issw.requestmetrics.gui.comparator.ElapsedTimeComparator;
 import de.ibm.issw.requestmetrics.model.RMNode;
 import de.ibm.issw.requestmetrics.model.RmRootCase;
+import de.ibm.issw.requestmetrics.util.FileTypeFilter;
 
 @SuppressWarnings("serial")
-public class RequestMetricsGui extends JDialog implements Observer {
-	public RequestMetricsGui() {
-		
-		}
-	private static final Logger LOG = Logger.getLogger(RequestMetricsGui.class.getName());
-	private List<NonUniqueRequestIdEvent> nonUniqueReqIds = new ArrayList<NonUniqueRequestIdEvent>();
-	private StringBuffer invalidFiles = new StringBuffer();
-	// GUI elements
-	private static final JInternalFrame treeInternalFrame = new JInternalFrame("Transaction Drilldown", true, false, true, true);
-	private static final JInternalFrame listInternalFrame = new JInternalFrame("Root Cases", true, false, true, true);
-	
+public class RequestMetricsGui implements Observer {
+	// Logging and utilities
+	public static final Logger LOG = LoggerFactory.getLogger(RequestMetricsGui.class);
 	private static final SimpleDateFormat sdf = new SimpleDateFormat("y/MM/dd HH:mm:ss.S");
 	
+	// Variables holding business state
 	private RmProcessor processor;
-	private static JTable rootCaseTable;
+	private List<NonUniqueRequestIdEvent> nonUniqueReqIds = new ArrayList<NonUniqueRequestIdEvent>();
+	private StringBuffer invalidFiles = new StringBuffer();
+	private RMNode currentSelectedRootNode;
+
+	// GUI elements
+	private final JPanel transactionDrilldownScrollFrame = new JPanel(new BorderLayout());
+	private final JPanel rootCaseScrollFrame = new JPanel(new BorderLayout());
+	
+	private RootCaseToolBar rootCaseToolBar = new RootCaseToolBar(this);
+	private JTable rootCaseTable;
 	private ProgressBarDialog fileProcessingDialog;
 	private TransactionDrilldownPanel transactionDrilldownPanel;
-	private RMNode currentSelectedRootNode;
 	private TransactionDrilldownToolBar transactionDrilldownToolBar = new TransactionDrilldownToolBar();
-	private RootCaseToolBar rootCaseToolBar = new RootCaseToolBar();
+	private JFrame mainFrame = new JFrame("RM Records Log File Analysis Results");
 	
 	public Dimension getMinimumSize() {
 		return new Dimension(100, 800);
@@ -73,6 +78,14 @@ public class RequestMetricsGui extends JDialog implements Observer {
 		return new Dimension(100, 800);
 	}
 	
+	public JFrame getMainFrame() {
+		return mainFrame;
+	}
+	
+	public TransactionDrilldownToolBar getTransactionDrilldownToolBar() {
+		return transactionDrilldownToolBar;
+	}
+	
 	public void createAndShowGUI(final RmProcessor processor) {
 		this.processor = processor;
 		
@@ -80,21 +93,16 @@ public class RequestMetricsGui extends JDialog implements Observer {
 		processor.addObserver(this);
 		
 		buildRootCaseTable();
-		JScrollPane listScrollPane = new JScrollPane(rootCaseTable);
-
-		listInternalFrame.add(rootCaseToolBar, "North");
-		listInternalFrame.getContentPane().add(listScrollPane, "Center");
-		listInternalFrame.setVisible(true);
-						
-		treeInternalFrame.getContentPane().add(transactionDrilldownToolBar, "North");
-		treeInternalFrame.setVisible(true);
-
-		JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT);
-		splitPane.setDividerLocation(250);
-		splitPane.setLeftComponent(listInternalFrame);
-		splitPane.setRightComponent(treeInternalFrame);
+		rootCaseScrollFrame.add(rootCaseToolBar, BorderLayout.NORTH);
+		rootCaseScrollFrame.add(new JScrollPane(rootCaseTable), BorderLayout.CENTER);
+		setTitleRootCaseFrame("Transactions");
 		
-		JFrame mainFrame = new JFrame("RM Records Log File Analysis Results");
+		setTitleTransactionDrilldownFrame("Transaction Drilldown");
+		transactionDrilldownScrollFrame.add(transactionDrilldownToolBar, BorderLayout.NORTH);
+		
+		JSplitPane splitPane = new JSplitPane(JSplitPane.VERTICAL_SPLIT, rootCaseScrollFrame, transactionDrilldownScrollFrame);
+		splitPane.setResizeWeight(0.3);
+		
 		final JMenuBar menuBar = buildMenubar(mainFrame, processor);
 		mainFrame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
 		mainFrame.setExtendedState(JFrame.MAXIMIZED_BOTH);
@@ -106,20 +114,26 @@ public class RequestMetricsGui extends JDialog implements Observer {
 	}
 
 
-	private JMenuBar buildMenubar(JFrame mainFrame, final RmProcessor processor) {
+	private JMenuBar buildMenubar(final JFrame mainFrame, final RmProcessor processor) {
 		JMenuBar menu = new JMenuBar();
 		
 		JMenu fileMenu = new JMenu("File");
-		final FileDialog fd = new FileDialog(mainFrame, "Load Scenario File", FileDialog.LOAD);
-		fd.setMultipleMode(true);
+		final JFileChooser fc = new JFileChooser();
+		FileFilter logFilter = new FileTypeFilter(".log", "Log Files");
+		FileFilter zipFilter = new FileTypeFilter(".zip", "ZIP Files");
+		fc.addChoosableFileFilter(logFilter);
+		fc.addChoosableFileFilter(zipFilter);
+		fc.setMultiSelectionEnabled(true);
+		fc.setFileSelectionMode(JFileChooser.FILES_AND_DIRECTORIES);
 		
 		JMenuItem fileLoadScenarioItem = new JMenuItem("Load Scenario");
 		fileLoadScenarioItem.addActionListener(new ActionListener() {
 			@Override
 			public void actionPerformed(ActionEvent e) {
-				fd.setVisible(true);
-				final File[] files = fd.getFiles();
-				if(files.length == 0) return;
+				int action = fc.showOpenDialog(mainFrame);
+				
+				final File[] files = fc.getSelectedFiles();
+				if(action != JFileChooser.APPROVE_OPTION || files.length == 0) return;
 				
 				processor.reset();
 				invalidFiles = new StringBuffer();
@@ -131,7 +145,7 @@ public class RequestMetricsGui extends JDialog implements Observer {
 				new Thread(new Runnable() {
 					public void run() {
 						processor.processInputFiles(files);
-						setTitleRootCaseFrame(processor.getRootCases().size());
+						setTitleRootCaseFrame(processor.getRootCases().size() + " Transactions");
 						
 						// remove the old model
 						List<RmRootCase> rootCases = processor.getRootCases();
@@ -141,8 +155,8 @@ public class RequestMetricsGui extends JDialog implements Observer {
 							// the width is currently hard coded and could be gathered from data in future
 							rootCaseTable.getColumnModel().getColumn(RootCaseTableModel.FILE_COLUMN_INDEX).setMinWidth(215); 
 							rootCaseTable.getColumnModel().getColumn(RootCaseTableModel.FILE_COLUMN_INDEX).setMaxWidth(515); 
-							rootCaseTable.getColumnModel().getColumn(RootCaseTableModel.TIMESTAMP_COLUMN_INDEX).setMinWidth(160); 
-							rootCaseTable.getColumnModel().getColumn(RootCaseTableModel.TIMESTAMP_COLUMN_INDEX).setMaxWidth(160); 
+							rootCaseTable.getColumnModel().getColumn(RootCaseTableModel.TIMESTAMP_COLUMN_INDEX).setMinWidth(170); 
+							rootCaseTable.getColumnModel().getColumn(RootCaseTableModel.TIMESTAMP_COLUMN_INDEX).setMaxWidth(200); 
 							rootCaseTable.getColumnModel().getColumn(RootCaseTableModel.ELAPSEDTIME_COLUMN_INDEX).setMinWidth(100); 
 							rootCaseTable.getColumnModel().getColumn(RootCaseTableModel.ELAPSEDTIME_COLUMN_INDEX).setMaxWidth(100); 
 							rootCaseTable.getColumnModel().getColumn(RootCaseTableModel.TYPE_COLUMN_INDEX).setMinWidth(140); 
@@ -177,8 +191,16 @@ public class RequestMetricsGui extends JDialog implements Observer {
 		return menu;
 	}
 	
-	public static void setTitleRootCaseFrame(int numberOfRootCases) {
-		listInternalFrame.setTitle(numberOfRootCases + " Root Cases");
+	public void setTitleRootCaseFrame(String title) {
+		TitledBorder border = BorderFactory.createTitledBorder(title);
+		border.setTitleJustification(TitledBorder.CENTER);
+		rootCaseScrollFrame.setBorder(border);
+	}
+	
+	public void setTitleTransactionDrilldownFrame(String title) {
+		TitledBorder border = BorderFactory.createTitledBorder(title);
+		border.setTitleJustification(TitledBorder.CENTER);
+		transactionDrilldownScrollFrame.setBorder(border);
 	}
 
 	private void buildRootCaseTable() {
@@ -198,18 +220,18 @@ public class RequestMetricsGui extends JDialog implements Observer {
 					int row = rootCaseTable.getSelectedRow();
 					if(row != -1) { //if no row is selected row = -1 (and we do nothing)
 						final RmRootCase currentSelectedRootCase = processor.getRootCases().get(rootCaseTable.convertRowIndexToModel(row));
-						LOG.fine("user selected use case " + currentSelectedRootCase.getRmNode().toString());
+						LOG.debug("user selected use case " + currentSelectedRootCase.getRmNode().toString());
 						
 						currentSelectedRootNode = currentSelectedRootCase.getRmNode();
 						currentSelectedRootNode.calculateExecutionTime();
 						resetGui();
 						transactionDrilldownPanel = new TransactionDrilldownPanel(rootWindow, currentSelectedRootNode, processor);
-						treeInternalFrame.getContentPane().add(transactionDrilldownPanel, "Center");
-						treeInternalFrame.setTitle("Transaction Drilldown for #" + currentSelectedRootCase.getRmNode().getData().getCurrentCmp().getReqid() + " " + currentSelectedRootCase.getRmNode().getData().getDetailCmp());
+						transactionDrilldownScrollFrame.add(transactionDrilldownPanel, "Center");
+						setTitleTransactionDrilldownFrame("Transaction Drilldown for #" + currentSelectedRootCase.getRmNode().getData().getCurrentCmp().getReqid() + " " + currentSelectedRootCase.getRmNode().getData().getDetailCmp());
 						
 						transactionDrilldownToolBar.enableSelectionButtons(transactionDrilldownPanel);
 						
-						treeInternalFrame.setVisible(true);
+						transactionDrilldownScrollFrame.setVisible(true);
 						repaintGui();
 					}
 				}
@@ -218,41 +240,33 @@ public class RequestMetricsGui extends JDialog implements Observer {
 	}
 	
 	private void resetGui() {
-		treeInternalFrame.setVisible(false);
-		treeInternalFrame.setTitle("Transaction Drilldown");
-		if(transactionDrilldownPanel != null) treeInternalFrame.getContentPane().remove(transactionDrilldownPanel);
-		treeInternalFrame.setVisible(true);
+		transactionDrilldownScrollFrame.setVisible(false);
+		setTitleTransactionDrilldownFrame("Transaction Drilldown");
+		
+		if(transactionDrilldownPanel != null) transactionDrilldownScrollFrame.remove(transactionDrilldownPanel);
+		transactionDrilldownScrollFrame.setVisible(true);
 		transactionDrilldownToolBar.disableSelectionButtons();
 		transactionDrilldownToolBar.disableStatisticsButton();
 	}
 	
 	private void repaintGui() {
-		treeInternalFrame.repaint();
-		listInternalFrame.repaint();
+		transactionDrilldownScrollFrame.repaint();
+		rootCaseScrollFrame.repaint();
 		if(transactionDrilldownPanel != null) transactionDrilldownPanel.repaint();
 	}
 	
-	public TransactionDrilldownToolBar getTransactionDrilldownToolBar() {
-		return transactionDrilldownToolBar;
-	}
-
 	@Override
 	public void update(Observable o, Object event) {
-		if(event instanceof ParsingFileHasFinishedEvent) {
-			//create a log entry if parsing of a file has finished
-			ParsingFileHasFinishedEvent concreteEvent = (ParsingFileHasFinishedEvent) event;
-			LOG.info("parsing of file " + concreteEvent.getFileName() + " has finished.");
-		} 
-		else if (event instanceof PercentageIncreasedEvent) {
+		if (event instanceof PercentageIncreasedEvent) {
 			//update progress bar
 			PercentageIncreasedEvent concreteEvent = (PercentageIncreasedEvent) event;
 			fileProcessingDialog.update(concreteEvent);
 		} 
 		else if(event instanceof ParsingAllFilesHasFinishedEvent) {
+			LOG.debug("Parsing of all files finished. The following were processed: " + ((ParsingAllFilesHasFinishedEvent)event).getFiles().toString());
 			/*notify user when parsing of all Files has finished, show which files could not be parsed, reset
 			 *the internal window frames and dispose the progress bar dialog
 			 */
-			LOG.info("parsing of all files has finished.");
 			if (invalidFiles.length() > 0)
 				JOptionPane.showMessageDialog(null, "The following files are invalid and could not be parsed:" + invalidFiles);
 			fileProcessingDialog.dispose();
@@ -266,7 +280,7 @@ public class RequestMetricsGui extends JDialog implements Observer {
 		else if (event instanceof LogParsingTypeEvent) {
 			//create a log info about the type of a loaded file
 			LogParsingTypeEvent concreteEvent = (LogParsingTypeEvent) event;
-			String typeInfo = String.format("The loaded file '%s' was of type '%s'\n", concreteEvent.getFileName(),concreteEvent.getType());
+			String typeInfo = String.format("The loaded file '%s' was of type '%s'", concreteEvent.getFileName(),concreteEvent.getType());
 			LOG.info(typeInfo);
 		} 
 		else if (event instanceof NonUniqueRequestIdEvent) {
@@ -274,6 +288,8 @@ public class RequestMetricsGui extends JDialog implements Observer {
 			NonUniqueRequestIdEvent concreteEvent = (NonUniqueRequestIdEvent) event;
 			nonUniqueReqIds.add(concreteEvent);
 			LOG.info("There are" + nonUniqueReqIds.size() + "non unique request IDs");
-		} 
+		} else {
+			LOG.info("unhandled event of type " + event.getClass());
+		}
 	}
 }
