@@ -25,6 +25,7 @@ import org.slf4j.LoggerFactory;
 import de.ibm.issw.requestmetrics.engine.events.ParsingAllFilesHasFinishedEvent;
 import de.ibm.issw.requestmetrics.engine.events.ParsingFileHasFinishedEvent;
 import de.ibm.issw.requestmetrics.engine.events.PercentageIncreasedEvent;
+import de.ibm.issw.requestmetrics.engine.events.UnsupportedFileEvent;
 import de.ibm.issw.requestmetrics.util.FileCleaner;
 import de.ibm.issw.requestmetrics.util.FileDetector;
 
@@ -202,6 +203,11 @@ public class FileHandler extends Observable {
 				checkProcessedLines(processedLines, file.getAbsolutePath());
 			}
 			inputStream.close();
+			
+			if (processedLines == 0) {
+				setChanged();
+				notifyObservers(new UnsupportedFileEvent(this, file.getName()));
+			}
 
 			LOG.info("Processed " + totalProcessedLines + " lines.");
 

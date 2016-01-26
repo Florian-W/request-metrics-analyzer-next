@@ -74,11 +74,6 @@ public class RmProcessor extends Observable implements Processor{
 	@Override
 	public void afterSingleFileParsed(File file) {
 		LOG.info("Finished to parse file " + file.getName());
-		if (rootCases.size() == 0 && allNodes.size() == 0){
-			//notify observers that the file can not be processed because no metrics data was found
-			setChanged();
-			notifyObservers(new UnsupportedFileEvent(this, file.getName()));
-		}
 	}
 	
 	@Override
